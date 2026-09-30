@@ -45,6 +45,15 @@ chmod +x start-librecrawl.sh
 ./start-librecrawl.sh
 ```
 
+**Windows without Docker (single local user):**
+```batch
+start-librecrawl-local.bat
+```
+Requires a 64-bit Python 3.9+ (Playwright has no 32-bit Windows build). It creates a
+virtualenv in `%LOCALAPPDATA%\LibreCrawl\venv`, reinstalls dependencies whenever
+`requirements.txt` changes, and runs in local mode (no login) bound to `127.0.0.1`
+only, so the app is not reachable from the network.
+
 **What it does automatically:**
 1. Checks for Docker - if found, runs LibreCrawl in a container (recommended)
 2. If no Docker, checks for Python - if not found, downloads and installs it (Windows only *temporairly disabled since it causes some bat issues*)
