@@ -1,0 +1,524 @@
+/*
+ * Bemol theme for the LibreCrawl home page.
+ *
+ * Loaded after styles.css and overrides only brand-bearing rules, so upstream
+ * files stay close to the original and future merges remain easy.
+ *
+ * Contrast (WCAG 2.1, verified):
+ *   #ffffff on --brand-blue-strong  4.74  (AA normal text)
+ *   --text on --bg                 14.37
+ *   --text-muted on --surface       6.98
+ *   --accent on --surface           7.47
+ *   --brand-blue on --bg            5.08  (UI indicators, focus rings)
+ *   --brand-blue-deep on #ffffff    7.45
+ *   #ffffff on --danger / --success 4.54
+ */
+
+:root {
+    /* Brand (values taken from the official Bemol logo SVG) */
+    --brand-blue: #0096d7;
+    --brand-blue-strong: #0079b8;   /* Brand blue darkened to carry white text */
+    --brand-blue-deep: #005a88;
+    --brand-red: #ee3c34;           /* Brand accent only, never for errors */
+    --brand-cyan: #00e5f0;          /* Dark backgrounds only */
+
+    /* Neutrals (navy, derived from the brand blue) */
+    --bg: #0b1e33;
+    --surface: #10283f;
+    --surface-raised: #16324d;
+    --border: #28486a;
+    --text: #e6eef6;
+    --text-muted: #9fb3c8;
+    --accent: #4cc3f5;              /* Readable brand blue for text on navy */
+    --accent-soft: rgba(0, 150, 215, 0.14);
+    --accent-softer: rgba(0, 150, 215, 0.08);
+
+    /* Semantic */
+    --status-2xx: #22c55e;
+    --status-3xx: #f5b83d;
+    --status-4xx: #fb923c;
+    --status-5xx: #f43f5e;
+    --status-none: #94a3b8;
+    --danger: #d93b33;
+    --danger-hover: #c0302a;
+    --success: #1e874b;
+    --info: var(--accent);
+
+    /* Shape and motion */
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-pill: 999px;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+    --focus-ring: 0 0 0 3px rgba(0, 150, 215, 0.45);
+    --transition: 0.2s ease;
+}
+
+/* Base */
+body,
+.app-container {
+    background: var(--bg);
+    color: var(--text);
+}
+
+:focus-visible {
+    outline: 2px solid var(--brand-blue);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition: none !important;
+        animation: none !important;
+    }
+}
+
+/* Header */
+.header {
+    background: var(--brand-blue-strong);
+    backdrop-filter: none;
+    border-bottom: 0;
+    padding: 10px 24px;
+    box-shadow: var(--shadow-md);
+}
+
+.app-title::after {
+    display: none;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #ffffff;
+    text-decoration: none;
+    border-radius: var(--radius-md);
+}
+
+.brand-logo {
+    height: 40px;
+    width: auto;
+    display: block;
+}
+
+.brand-name {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: #ffffff;
+}
+
+.header-actions {
+    align-items: center;
+}
+
+.header .btn {
+    padding: 8px 16px;
+    border-radius: var(--radius-pill);
+    font-size: 13px;
+    box-shadow: none;
+    transform: none;
+}
+
+.header .btn:focus-visible {
+    outline-color: #ffffff;
+}
+
+/* Secondary actions: ghost */
+.header .btn-secondary {
+    background: rgba(0, 0, 0, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    color: #ffffff;
+}
+
+.header .btn-secondary:hover {
+    background: rgba(0, 0, 0, 0.26);
+}
+
+/* Load Crawl: outline */
+.header .btn-primary {
+    background: transparent;
+    border: 1px solid #ffffff;
+    color: #ffffff;
+}
+
+.header .btn-primary:hover:not(:disabled) {
+    background: rgba(0, 0, 0, 0.2);
+    box-shadow: none;
+    transform: none;
+}
+
+/* Save Crawl: the single primary action */
+.header .btn-success {
+    background: #ffffff;
+    border: 1px solid #ffffff;
+    color: var(--brand-blue-deep);
+}
+
+.header .btn-success:hover:not(:disabled) {
+    background: #e6f4fb;
+    box-shadow: none;
+    transform: none;
+}
+
+.header-user {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 12px;
+    padding-left: 16px;
+    border-left: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+/* app.js sets an inline gray color meant for the old dark header */
+#userInfo {
+    color: #ffffff !important;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* Logout: discreet text action */
+.header .btn-danger {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #ffffff;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.header .btn-danger:hover:not(:disabled) {
+    background: rgba(0, 0, 0, 0.2);
+    transform: none;
+}
+
+/* URL bar */
+.url-section {
+    background: var(--surface);
+    backdrop-filter: none;
+    border-bottom: 1px solid var(--border);
+}
+
+.url-container {
+    align-items: flex-end;
+}
+
+.input-label {
+    color: var(--text-muted);
+}
+
+.input-label::after {
+    display: none;
+}
+
+.url-input {
+    padding: 14px 24px;
+    background: var(--bg);
+    border: 2px solid var(--border);
+    border-radius: var(--radius-pill);
+    color: var(--text);
+    font-size: 16px;
+}
+
+.url-input:hover {
+    border-color: var(--text-muted);
+}
+
+.url-input:focus {
+    border-color: var(--brand-blue);
+    background: var(--bg);
+    box-shadow: var(--focus-ring);
+}
+
+.url-input::placeholder {
+    color: var(--text-muted);
+}
+
+.control-buttons .btn {
+    padding: 14px 24px;
+    border-radius: var(--radius-pill);
+}
+
+.progress-bar {
+    background: var(--surface-raised);
+}
+
+.progress-fill {
+    background: linear-gradient(90deg, var(--brand-blue), var(--brand-cyan));
+}
+
+.progress-text {
+    color: var(--text);
+}
+
+/* Buttons outside the header */
+.btn-primary {
+    background: var(--brand-blue-strong);
+    border: 1px solid var(--brand-blue-strong);
+    color: #ffffff;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: var(--brand-blue-deep);
+    border-color: var(--brand-blue-deep);
+    box-shadow: var(--shadow-md);
+}
+
+.btn-secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+}
+
+.btn-secondary:hover {
+    background: var(--accent-softer);
+    border-color: var(--text-muted);
+}
+
+.btn-success {
+    background: var(--success);
+    border: 1px solid var(--success);
+}
+
+.btn-danger {
+    background: var(--danger);
+    border: 1px solid var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+    background: var(--danger-hover);
+}
+
+/* Sidebar */
+.sidebar {
+    background: var(--surface);
+    backdrop-filter: none;
+    border-right: 1px solid var(--border);
+}
+
+.sidebar-title {
+    color: var(--accent);
+}
+
+.filter-header {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.filter-item {
+    color: var(--text);
+}
+
+.filter-item:hover {
+    background: var(--accent-softer);
+}
+
+.filter-item.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    box-shadow: inset 3px 0 0 var(--brand-blue);
+}
+
+.filter-count {
+    background: var(--surface-raised);
+    color: var(--text);
+    border-radius: var(--radius-pill);
+    padding: 2px 8px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Status code badges; IDs start with a digit, so attribute selectors are used */
+[id="2xx-count"] { color: var(--status-2xx); background: rgba(34, 197, 94, 0.14); }
+[id="3xx-count"] { color: var(--status-3xx); background: rgba(245, 184, 61, 0.14); }
+[id="4xx-count"] { color: var(--status-4xx); background: rgba(251, 146, 60, 0.14); }
+[id="5xx-count"] { color: var(--status-5xx); background: rgba(244, 63, 94, 0.14); }
+#no_response-count { color: var(--status-none); }
+
+.stat-item {
+    background: var(--surface-raised);
+}
+
+.stat-label {
+    color: var(--text-muted);
+}
+
+.stat-value {
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Tabs */
+.tab-header {
+    background: var(--surface);
+    backdrop-filter: none;
+    border-bottom: 1px solid var(--border);
+}
+
+.tab-btn {
+    color: var(--text-muted);
+}
+
+.tab-btn:hover {
+    color: var(--text);
+    background: var(--accent-softer);
+}
+
+.tab-btn.active {
+    color: var(--text);
+    border-bottom-color: var(--brand-blue);
+    background: transparent;
+}
+
+/* Table */
+.data-table th {
+    background: var(--surface-raised);
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+}
+
+.data-table td {
+    color: var(--text);
+    border-bottom-color: rgba(159, 179, 200, 0.12);
+    font-variant-numeric: tabular-nums;
+}
+
+.data-table tbody tr:nth-child(even) {
+    background: rgba(159, 179, 200, 0.04);
+}
+
+.data-table tbody tr:hover {
+    background: var(--accent-softer);
+}
+
+/* Status bar */
+.status-bar {
+    background: var(--surface);
+    backdrop-filter: none;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+}
+
+.status-bar-meta {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.powered-by {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.powered-by a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.powered-by a:hover {
+    text-decoration: underline;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar-track {
+    background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(0, 150, 215, 0.45);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 150, 215, 0.7);
+}
+
+/* Modals (Settings, Dashboard) */
+.modal-content {
+    background: var(--surface);
+    border-color: var(--border);
+    border-radius: var(--radius-lg);
+}
+
+.modal-header {
+    background: var(--brand-blue-strong);
+    border-bottom: 0;
+}
+
+.modal-header h2,
+.modal-close {
+    color: #ffffff;
+}
+
+.modal-close:hover {
+    background: rgba(0, 0, 0, 0.2);
+    color: #ffffff;
+}
+
+.modal-footer {
+    background: var(--bg);
+    border-top-color: var(--border);
+}
+
+.settings-tabs {
+    background: var(--bg);
+    border-bottom-color: var(--border);
+}
+
+.settings-tab-btn.active {
+    color: var(--text);
+    border-bottom-color: var(--brand-blue);
+    background: transparent;
+}
+
+.setting-group input[type="text"]:focus,
+.setting-group input[type="number"]:focus,
+.setting-group select:focus,
+.setting-group textarea:focus {
+    border-color: var(--brand-blue);
+    box-shadow: var(--focus-ring);
+}
+
+.checkbox-label input[type="checkbox"] {
+    accent-color: var(--brand-blue);
+}
+
+/* Remaining purple accents from styles.css */
+.details-url,
+.details-grid strong,
+.json-preview,
+.pagespeed-page-url,
+.metric-value,
+.cy-tooltip .tooltip-url {
+    color: var(--accent);
+}
+
+.details-btn {
+    background: var(--brand-blue-strong);
+    border-radius: var(--radius-pill);
+}
+
+.details-btn:hover {
+    background: var(--brand-blue-deep);
+    box-shadow: var(--shadow-sm);
+}
+
+.links-section-title {
+    border-bottom-color: rgba(0, 150, 215, 0.35);
+}
+
+.visualization-controls select:hover,
+.cy-tooltip {
+    border-color: var(--brand-blue);
+}
+
+/* Visualization graph colors, read by visualization.js */
+:root {
+    --viz-label: var(--text);
+    --viz-label-outline: var(--bg);
+    --viz-node-border: var(--border);
+    --viz-edge: #3d5f82;
+    --viz-selected: var(--brand-cyan);
+    --viz-export-bg: var(--bg);
+}

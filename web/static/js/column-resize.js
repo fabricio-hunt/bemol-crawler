@@ -44,7 +44,7 @@ class ColumnResizer {
 
             // Add hover indicator
             grip.addEventListener('mouseenter', () => {
-                grip.style.background = 'rgba(139, 92, 246, 0.2)';
+                grip.style.background = 'rgba(0, 150, 215, 0.25)';
             });
 
             grip.addEventListener('mouseleave', () => {
@@ -73,7 +73,7 @@ class ColumnResizer {
         this.startX = e.pageX;
         this.startWidth = th.offsetWidth;
 
-        grip.style.background = 'rgba(139, 92, 246, 0.5)';
+        grip.style.background = 'rgba(0, 150, 215, 0.6)';
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
     }

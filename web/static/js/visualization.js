@@ -9,6 +9,15 @@ let currentLayout = 'cose';  // Current layout algorithm
 let currentFilter = 'all';  // Current filter
 
 /**
+ * Read a theme color from a CSS custom property, falling back to the
+ * original LibreCrawl palette when no theme defines it.
+ */
+function themeColor(name, fallback) {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value || fallback;
+}
+
+/**
  * Initialize the visualization when tab is opened
  */
 function initVisualization() {
@@ -41,21 +50,21 @@ function initVisualization() {
                     'width': 'data(size)',
                     'height': 'data(size)',
                     'font-size': '12px',
-                    'color': '#e5e7eb',
-                    'text-outline-color': '#1f2937',
+                    'color': themeColor('--viz-label', '#e5e7eb'),
+                    'text-outline-color': themeColor('--viz-label-outline', '#1f2937'),
                     'text-outline-width': 2,
                     'text-valign': 'bottom',
                     'text-halign': 'center',
                     'text-margin-y': 5,
                     'overlay-opacity': 0,
                     'border-width': 2,
-                    'border-color': '#374151'
+                    'border-color': themeColor('--viz-node-border', '#374151')
                 }
             },
             {
                 selector: 'node:selected',
                 style: {
-                    'border-color': '#8b5cf6',
+                    'border-color': themeColor('--viz-selected', '#8b5cf6'),
                     'border-width': 3,
                     'overlay-opacity': 0
                 }
@@ -64,8 +73,8 @@ function initVisualization() {
                 selector: 'edge',
                 style: {
                     'width': 2,
-                    'line-color': '#4b5563',
-                    'target-arrow-color': '#4b5563',
+                    'line-color': themeColor('--viz-edge', '#4b5563'),
+                    'target-arrow-color': themeColor('--viz-edge', '#4b5563'),
                     'target-arrow-shape': 'triangle',
                     'curve-style': 'bezier',
                     'arrow-scale': 1,
@@ -75,8 +84,8 @@ function initVisualization() {
             {
                 selector: 'edge:selected',
                 style: {
-                    'line-color': '#8b5cf6',
-                    'target-arrow-color': '#8b5cf6',
+                    'line-color': themeColor('--viz-selected', '#8b5cf6'),
+                    'target-arrow-color': themeColor('--viz-selected', '#8b5cf6'),
                     'width': 3,
                     'opacity': 1
                 }
@@ -361,7 +370,7 @@ function exportVisualizationImage() {
 
     const png = cy.png({
         output: 'blob',
-        bg: '#1a1d29',
+        bg: themeColor('--viz-export-bg', '#1a1d29'),
         full: true,
         scale: 2
     });

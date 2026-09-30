@@ -2,8 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>LibreCrawl - SEO Spider</title>
+    <title>Bemol Crawler - SEO Spider</title>
+    <link rel="icon" href="/static/brand/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/brand/favicon-32.png">
+    <link rel="apple-touch-icon" href="/static/brand/apple-touch-icon.png">
     <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/theme-bemol.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
 </head>
@@ -12,9 +16,13 @@
         <!-- Header -->
         <header class="header">
             <div class="header-content">
-                <h1 class="app-title">LibreCrawl</h1>
+                <h1 class="app-title">
+                    <a class="brand" href="/">
+                        <img class="brand-logo" src="/static/brand/logo-mark-white.png" alt="" width="34" height="40">
+                        <span class="brand-name">Bemol Crawler</span>
+                    </a>
+                </h1>
                 <div class="header-actions">
-                    <span id="userInfo" style="margin-right: 15px; color: #6b7280; font-size: 14px;"></span>
                     <a class="btn btn-secondary" href="https://workshop.librecrawl.com"
                        target="_blank" rel="noopener"
                        title="Browse and share community plugins">Workshop</a>
@@ -23,7 +31,10 @@
                     <button class="btn btn-secondary" id="exportBtn" onclick="exportData()">Export</button>
                     <button class="btn btn-success" id="saveCrawlBtn" onclick="saveCrawl()" disabled>Save Crawl</button>
                     <button class="btn btn-primary" id="loadCrawlBtn" onclick="loadCrawl()">Load Crawl</button>
-                    <button class="btn btn-danger" onclick="logout()" style="margin-left: 10px;">Logout</button>
+                    <div class="header-user">
+                        <span id="userInfo"></span>
+                        <button class="btn btn-danger" onclick="logout()">Logout</button>
+                    </div>
                 </div>
             </div>
         </header>
@@ -486,7 +497,10 @@
         <!-- Status Bar -->
         <footer class="status-bar">
             <span id="statusText">Ready</span>
-            <span id="crawlTime">00:00</span>
+            <span class="status-bar-meta">
+                <span class="powered-by">Powered by <a href="https://github.com/PhialsBasement/LibreCrawl" target="_blank" rel="noopener">LibreCrawl</a></span>
+                <span id="crawlTime">00:00</span>
+            </span>
         </footer>
     </div>
 
