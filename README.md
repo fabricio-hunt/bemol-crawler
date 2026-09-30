@@ -1,343 +1,773 @@
-# LibreCrawl
+<p align="center">
+  <img src="web/static/brand/logo-mark.png" alt="Bemol Crawler logo" height="120">
+</p>
 
-A web-based multi-tenant crawler for SEO analysis and website auditing.
+<h1 align="center">Bemol Crawler</h1>
 
-🌐 **Website**: [librecrawl.com](https://librecrawl.com)
+<p align="center">
+  Self-hosted technical SEO crawler used to audit <code>bemol.com.br</code>.<br>
+  A branded, Windows-friendly distribution of <a href="https://github.com/PhialsBasement/LibreCrawl">LibreCrawl</a>.
+</p>
 
-**Demo no longer available cause people thought it was a prod environ, it isnt, it was a demo to get a taste before installing**
+<p align="center">
+  <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B%20(64--bit)-0079b8">
+  <img alt="Flask" src="https://img.shields.io/badge/flask-2.3-0079b8">
+  <img alt="Playwright" src="https://img.shields.io/badge/playwright-chromium-0079b8">
+  <img alt="Tests" src="https://img.shields.io/badge/fixture%20tests-58%20passing-1e874b">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-lightgrey">
+</p>
 
-**API Documentation:** [https://librecrawl.com/api/docs/](https://librecrawl.com/api/docs/)
+---
 
-**Browse plugins other people have built, or share your own, at the [Plugin Workshop](https://workshop.librecrawl.com)**.
+## Table of Contents
 
-LibreCrawl will ***always*** be free and open source. If it's replacing your $279/year Screaming Frog license, deepcrawl license or sitebulb license, [buy me a coffee](https://www.paypal.com/donate/?business=7H9HFA3385JS8&no_recurring=0&item_name=Continue+the+development+of+LibreCrawl&currency_code=AUD).
+- [Project Overview](#project-overview)
+- [Architecture](#architecture)
+- [Technology Stack](#technology-stack)
+- [Features](#features)
+- [Project Structure](#project-structure)
+- [Data Flow](#data-flow)
+- [Installation](#installation)
+- [API Documentation](#api-documentation)
+- [Database Design](#database-design)
+- [Security](#security)
+- [Testing Strategy](#testing-strategy)
+- [Observability](#observability)
+- [CI/CD Pipeline](#cicd-pipeline)
+- [Infrastructure](#infrastructure)
+- [Performance Considerations](#performance-considerations)
+- [Engineering Practices](#engineering-practices)
+- [Technical Decisions](#technical-decisions)
+- [Challenges and Lessons Learned](#challenges-and-lessons-learned)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+- [Author](#author)
 
-## What it does
+---
 
-LibreCrawl crawls websites and gives you detailed information about pages, links, SEO elements, and performance. It's built as a web application using Python Flask with a modern web interface supporting multiple concurrent users.
+## Project Overview
+
+### Executive Summary
+
+Bemol Crawler is a web-based SEO spider that crawls a website, extracts on-page
+SEO signals, maps internal and external links, detects technical issues, and
+exports the results. It runs entirely on a single workstation: no Docker, no
+external database, and no cloud account are required.
+
+### Business Context
+
+Technical SEO audits of a large VTEX storefront such as `bemol.com.br` require
+crawling tens of thousands of URLs (product, category, and institutional pages)
+on a recurring basis. Commercial crawlers are licensed per seat and per year,
+and corporate workstations often block the tooling that open source
+alternatives assume (Docker Desktop, administrator rights, unrestricted script
+execution).
+
+### Technical Context
+
+This repository is a fork of LibreCrawl. It keeps the upstream crawler engine
+intact and adds:
+
+- A native Windows startup path that works under corporate restrictions
+  (64-bit Python detection, virtualenv outside OneDrive, UTF-8 console fix).
+- A configurable bind address so single-user local mode is reachable from
+  `127.0.0.1` only.
+- A Bemol visual identity applied as an isolated theme layer, so upstream
+  changes can still be merged with minimal conflict.
+
+### Main Objectives
+
+- Run recurring SEO audits of `bemol.com.br` on a locked-down corporate laptop.
+- Keep the fork cheap to maintain by concentrating custom code in new files.
+- Keep crawl data local to the machine running the audit.
+
+### Key Benefits
+
+| Benefit | How it is achieved |
+|---|---|
+| Zero licensing cost | MIT-licensed upstream engine |
+| Runs without Docker or admin rights | Per-user Python virtualenv and a Chromium build downloaded by Playwright |
+| Renders JavaScript storefronts | Headless Chromium through Playwright |
+| Resumable long crawls | Crawl queue and results checkpointed to SQLite |
+| Upstream-friendly fork | Theme and branding live in separate files |
+
+---
+
+## Architecture
+
+### Architectural Style
+
+The application is a **modular monolith** with a **layered** internal structure,
+served by a single Python process. The browser UI is a thin client that polls
+an incremental event stream.
+
+| Layer | Location | Responsibility |
+|---|---|---|
+| Presentation | `web/templates`, `web/static` | Jinja2 pages, vanilla JS UI, plugins, theme |
+| Interface (HTTP) | `main.py` | Flask routes, session handling, per-user crawler registry |
+| Application | `src/crawler.py` | Crawl orchestration, worker pool, pause/resume, checkpointing |
+| Domain | `src/core/*` | SEO extraction, issue detection, link graph, sitemap parsing, rate limiting |
+| Infrastructure | `src/crawl_db.py`, `src/auth_db.py`, `src/core/js_renderer.py`, `src/email_service.py`, `src/zoho_oauth.py` | SQLite persistence, headless browser, SMTP, OAuth |
+
+### High-Level Architecture
+
+```mermaid
+flowchart LR
+    subgraph Browser
+        UI[Web UI<br/>vanilla JS + theme]
+        Poller[Incremental poller]
+    end
+
+    subgraph Process["Python process (Waitress, 8 threads)"]
+        Routes[Flask routes<br/>main.py]
+        Registry[Per-session<br/>crawler registry]
+        Crawler[WebCrawler<br/>ThreadPoolExecutor]
+        Core[SEO extractor<br/>Issue detector<br/>Link manager<br/>Sitemap parser]
+        Events[Crawl event log]
+        Renderer[JS renderer<br/>Playwright]
+    end
+
+    DB[(SQLite<br/>data/users.db)]
+    Site[(Target website)]
+    Chromium[[Headless Chromium]]
+
+    UI -->|REST| Routes
+    Poller -->|GET /api/crawl_status?since=n| Routes
+    Routes --> Registry --> Crawler
+    Crawler -->|HTTP| Site
+    Crawler --> Renderer --> Chromium --> Site
+    Crawler --> Core --> Events
+    Crawler -->|batched writes| DB
+    Routes --> DB
+    Events --> Routes
+```
+
+### Design Patterns
+
+| Pattern | Where | Purpose |
+|---|---|---|
+| Registry | `crawler_instances` in `main.py` | One isolated crawler per browser session |
+| Worker pool | `ThreadPoolExecutor` in `src/crawler.py` | Bounded concurrent fetching |
+| Token bucket | `src/core/rate_limiter.py` | Smooth, polite request pacing against the target site |
+| Event sourcing (in-memory) | `src/core/event_log.py` | Monotonic event sequence so the UI receives only deltas |
+| Batch writer / checkpoint | `_save_batch_to_db`, `_save_queue_checkpoint` | Crash-safe persistence without per-row commits |
+| Plugin registry | `web/static/js/plugin-loader.js` | Drop-in UI tabs without touching core code |
+| Design tokens | `web/static/css/theme-bemol.css` | Single source of truth for brand colors |
+
+---
+
+## Technology Stack
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| Language | Python 3.9+ (64-bit) | Backend and crawler |
+| Language | JavaScript (ES2017+, no build step) | Browser UI |
+| Web framework | Flask 2.3 | Routing, sessions, templating |
+| WSGI server | Waitress | Multi-threaded production server, Windows compatible |
+| HTTP client | Requests + urllib3 | Page fetching with connection pooling |
+| HTML parsing | BeautifulSoup 4 | SEO signal extraction |
+| JS rendering | Playwright (Chromium, Firefox, WebKit) | Rendering client-side storefronts |
+| Database | SQLite (WAL mode) | Users, settings, crawl results, resumable queue |
+| Authentication | bcrypt, Flask sessions, optional Zoho OAuth 2.0 | Multi-user mode |
+| Graph visualization | Cytoscape.js | Site structure graph |
+| Exports | csv, openpyxl, json, xml.etree | CSV, XLSX, JSON, and XML exports |
+| Compression | Flask-Compress (gzip, brotli) | Smaller polling payloads |
+| Process metrics | psutil | Memory guardrails per crawl |
+| Configuration | python-dotenv | `.env` based configuration |
+| Containerization | Docker, Docker Compose | Optional, for servers where Docker is available |
+| Testing | Plain Python scripts with local fixture servers | Deterministic regression tests |
+| Caching / messaging / cloud / CI | Not used | See [Infrastructure](#infrastructure) and [CI/CD](#cicd-pipeline) |
+
+---
 
 ## Features
 
-- 🚀 **Multi-tenancy** - Multiple users can crawl simultaneously with isolated sessions
-- 🎨 **Custom CSS styling** - Personalize the UI with your own CSS themes
-- 💾 **Browser localStorage persistence** - Settings saved per browser
-- 🔄 **JavaScript rendering** for dynamic content (React, Vue, Angular, etc.)
-- 📊 **SEO analysis** - Extract titles, meta descriptions, headings, etc.
-- 🔗 **Link analysis** - Track internal and external links with detailed relationship mapping
-- 📈 **PageSpeed Insights integration** - Analyze Core Web Vitals
-- 💾 **Multiple export formats** - CSV, Excel (XLSX), JSON, or XML
-- 🔍 **Issue detection** - Automated SEO issue identification
-- ⚡ **Real-time crawling progress** with live statistics
+### Current Features
 
-## Getting started
-### Quick Start (Automatic Installation)
+- [x] Configurable crawl depth, URL limit, delay, and concurrency
+- [x] `robots.txt` compliance and automatic sitemap discovery
+- [x] JavaScript rendering with headless Chromium
+- [x] On-page SEO extraction: title, meta description, headings, canonical, Open Graph, JSON-LD, word count, image alt text
+- [x] Internal and external link mapping, with link-check-only external rows
+- [x] Automated issue detection with configurable exclusion patterns
+- [x] HTTP status filtering (2xx, 3xx, 4xx, 5xx, no response)
+- [x] PageSpeed Insights integration (Core Web Vitals)
+- [x] Interactive site structure visualization
+- [x] Pause, resume, and crash recovery for long crawls
+- [x] Crawl history with load, resume, archive, and delete
+- [x] Exports in CSV, XLSX, JSON, and XML
+- [x] UI plugin system (E-E-A-T analysis plugin included)
+- [x] Single-user local mode bound to `127.0.0.1`
+- [x] Native Windows startup script without Docker
+- [x] Bemol visual identity on the main crawl page
 
-**The easiest way to run LibreCrawl** - just run the startup script and it handles everything:
+### Planned Features
 
-**Windows:**
-```batch
-start-librecrawl.bat
+- [ ] Bemol theme on the login, register, and dashboard pages
+- [ ] Light theme as default with a persisted dark mode toggle
+- [ ] Self-hosted fonts and Cytoscape for fully offline use
+- [ ] Configurable data directory outside OneDrive-synced folders
+- [ ] GitHub Actions pipeline running the fixture tests
+
+### Future Roadmap
+
+- [ ] Scheduled recurring audits with crawl-to-crawl diff reports
+- [ ] VTEX-specific issue rules (product availability, faceted URL canonicals)
+- [ ] Scheduled summary reports for the SEO team
+
+---
+
+## Project Structure
+
+```text
+.
+├── main.py                      # Flask app: routes, sessions, crawler registry, exports
+├── src/
+│   ├── crawler.py               # Crawl orchestration, worker pool, checkpoints
+│   ├── crawl_db.py              # Crawl persistence (SQLite)
+│   ├── auth_db.py               # Users, tiers, verification tokens (SQLite)
+│   ├── settings_manager.py      # Settings schema, defaults, and validation
+│   ├── email_service.py         # SMTP verification emails
+│   ├── zoho_oauth.py            # Optional Zoho OAuth login
+│   └── core/
+│       ├── seo_extractor.py     # On-page SEO signal extraction
+│       ├── issue_detector.py    # SEO issue rules
+│       ├── link_manager.py      # Link graph and link status tracking
+│       ├── sitemap_parser.py    # Sitemap discovery and parsing
+│       ├── js_renderer.py       # Playwright headless rendering
+│       ├── rate_limiter.py      # Token bucket request pacing
+│       ├── event_log.py         # Incremental event stream for the UI
+│       ├── memory_monitor.py    # Process memory guardrails
+│       └── memory_profiler.py   # Per-user memory accounting
+├── web/
+│   ├── templates/               # Jinja2 pages (index, login, register, dashboard)
+│   └── static/
+│       ├── css/
+│       │   ├── styles.css       # Upstream base styles
+│       │   └── theme-bemol.css  # Bemol design tokens and overrides
+│       ├── js/                  # UI logic, incremental poller, visualization
+│       ├── plugins/             # Drop-in UI plugins
+│       └── brand/               # Logo variants and favicons
+├── logo/                        # Source logo artwork
+├── tests/
+│   ├── fixture_tests.py         # Deterministic regression tests (local servers)
+│   └── crawl_harness.py         # End-to-end harness against a live site
+├── data/                        # SQLite database (created at runtime, git-ignored)
+├── start-librecrawl-local.bat   # Native Windows startup (no Docker)
+├── start-librecrawl.bat / .sh   # Upstream startup scripts (Docker first)
+├── Dockerfile
+├── docker-compose.yml
+└── .env.example
 ```
 
-**Linux/Mac:**
+**Fork boundary:** Bemol-specific code lives in `theme-bemol.css`, `web/static/brand/`,
+`logo/`, and `start-librecrawl-local.bat`. Changes to upstream files are limited to
+small, reviewable edits so that `git merge upstream/main` stays practical.
+
+---
+
+## Data Flow
+
+```mermaid
+sequenceDiagram
+    participant UI as Browser UI
+    participant API as Flask (main.py)
+    participant C as WebCrawler
+    participant T as Target site
+    participant DB as SQLite
+
+    UI->>API: POST /api/start_crawl {url}
+    API->>API: Resolve session and tier, validate URL
+    API->>C: Create or reuse the session's crawler
+    API-->>UI: 200 {crawl_id}
+    loop Worker pool
+        C->>T: GET page (rate limited, robots.txt aware)
+        T-->>C: HTML / status
+        C->>C: Extract SEO data, links, issues
+        C->>DB: Batched insert + queue checkpoint
+    end
+    loop Every poll
+        UI->>API: GET /api/crawl_status?since=n
+        API-->>UI: Events after sequence n
+    end
+```
+
+1. **Request received:** the UI posts the start URL. In local mode the session
+   is auto-authenticated as the local admin user.
+2. **Validation:** the URL, tier limits, and crawler settings are checked. Settings
+   are range-validated in `settings_manager.py` (for example, depth 1-10,
+   concurrency 1-50, delay 0-60 s).
+3. **Business rules:** workers fetch pages, apply `robots.txt` and include or
+   exclude patterns, optionally render JavaScript, extract SEO signals, and
+   run issue detection.
+4. **Persistence:** results are written to SQLite in batches, and the pending
+   queue is checkpointed so a crashed or stopped crawl can resume.
+5. **Response:** every mutation becomes an event with a monotonic sequence
+   number. The UI requests only events it has not seen, so polling cost stays
+   flat as the crawl grows.
+
+---
+
+## Installation
+
+### Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| Python 3.9+ **64-bit** | Playwright does not ship 32-bit Windows builds |
+| ~500 MB disk | Virtualenv plus Chromium headless shell |
+| Outbound HTTPS | PyPI, Playwright CDN, and the target site |
+| Docker | Optional |
+
+Check the architecture of your Python:
+
 ```bash
-chmod +x start-librecrawl.sh
-./start-librecrawl.sh
+python -c "import struct; print(struct.calcsize('P') * 8)"   # must print 64
 ```
 
-**Windows without Docker (single local user):**
-```batch
+### Clone Repository
+
+```bash
+git clone https://github.com/fabricio-hunt/bemol-crawler.git
+cd bemol-crawler
+```
+
+### Environment Variables
+
+Copy `.env.example` to `.env`. A minimal single-user setup:
+
+```dotenv
+# Auto-login as local admin, no rate limits. Never expose this to a network.
+LOCAL_MODE=true
+
+# Bind address and port
+HOST=127.0.0.1
+PORT=5000
+
+# Required for multi-user deployments so sessions survive restarts
+# SECRET_KEY=<python -c "import secrets; print(secrets.token_hex(32))">
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `LOCAL_MODE` | `false` | Disables authentication and grants admin to every visitor |
+| `HOST` | `0.0.0.0` | Interface to bind (`127.0.0.1` = this machine only) |
+| `PORT` | `5000` | HTTP port |
+| `SECRET_KEY` | random per start | Session signing key |
+| `REGISTRATION_DISABLED` | `false` | Blocks new sign-ups |
+| `DISABLE_GUEST` | `false` | Blocks guest login |
+| `DEMO_MODE` | `false` | 1.5 GB memory cap per user |
+| `ZOHO_OAUTH_ENABLED` | `false` | Adds "Login with Zoho" (see `.env.example`) |
+| `SMTP_*`, `MAIN_APP_URL` | unset | Verification emails in multi-user mode |
+
+### Local Development
+
+**Windows (recommended on corporate machines):**
+
+```bat
 start-librecrawl-local.bat
 ```
-Requires a 64-bit Python 3.9+ (Playwright has no 32-bit Windows build). It creates a
-virtualenv in `%LOCALAPPDATA%\LibreCrawl\venv`, reinstalls dependencies whenever
-`requirements.txt` changes, and runs in local mode (no login) bound to `127.0.0.1`
-only, so the app is not reachable from the network.
 
-**What it does automatically:**
-1. Checks for Docker - if found, runs LibreCrawl in a container (recommended)
-2. If no Docker, checks for Python - if not found, downloads and installs it (Windows only *temporairly disabled since it causes some bat issues*)
-3. Installs all dependencies automatically (`pip install -r requirements.txt`)
-4. Installs Playwright browsers for JavaScript rendering
-5. Starts LibreCrawl in local mode (no authentication)
-6. Opens your browser to `http://localhost:5000`
+The script finds a 64-bit Python, creates a virtualenv in
+`%LOCALAPPDATA%\LibreCrawl\venv` (outside OneDrive), reinstalls dependencies
+when `requirements.txt` changes, installs Chromium, and starts the app on
+`http://localhost:5000`.
 
-### Manual Installation
-
-If you prefer to install manually or want more control:
-
-#### Option 1: Docker (Recommended)
-
-**Requirements:**
-- Docker and Docker Compose
-
-**Steps:**
-```bash
-# Clone the repository
-git clone https://github.com/PhialsBasement/LibreCrawl.git
-cd LibreCrawl
-
-# Copy environment file
-cp .env.example .env
-
-# Start LibreCrawl
-docker compose up -d
-
-# Open browser to http://localhost:5000
-```
-By default, LibreCrawl runs in local mode for easy personal use. The `.env` file controls this:
+**Manual (any OS):**
 
 ```bash
-# .env file
-LOCAL_MODE=true
-HOST_BINDING=127.0.0.1
-REGISTRATION_DISABLED=false
-```
-
-For production deployment with user authentication, edit your `.env` file:
-
-```bash
-# .env file
-LOCAL_MODE=false
-HOST_BINDING=0.0.0.0
-REGISTRATION_DISABLED=false
-# Generate with: python -c "import secrets; print(secrets.token_hex(32))"
-SECRET_KEY=replace-with-a-long-random-string
-```
-
-To add a **Login with Zoho** button, create a "Server-based Application" client at
-[api-console.zoho.com](https://api-console.zoho.com) with the redirect URI
-`https://your-host/auth/zoho/callback`, then set:
-
-```bash
-ZOHO_OAUTH_ENABLED=true
-ZOHO_CLIENT_ID=...
-ZOHO_CLIENT_SECRET=...
-ZOHO_REDIRECT_URI=https://your-host/auth/zoho/callback
-# Optional: ZOHO_ACCOUNTS_URL, ZOHO_ALLOWED_DOMAINS, ZOHO_ALLOW_SIGNUP, ZOHO_DEFAULT_TIER
-```
-
-See `.env.example` for what each option does.
-
-
-#### Option 2: Python
-
-- Python 3.8 or later
-- Modern web browser (Chrome, Firefox, Safari, Edge)
-
-### Installation
-
-1. Clone or download this repository
-
-2. Install dependencies:
-```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate    Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
+python -m playwright install chromium
+python -X utf8 main.py --local --host 127.0.0.1
 ```
 
-3. For JavaScript rendering support (optional):
+`-X utf8` avoids a `UnicodeEncodeError` on Windows consoles that use code page 1252.
+
+### Docker Setup
+
 ```bash
-playwright install chromium
+cp .env.example .env
+docker compose up -d
+# http://localhost:5000
 ```
 
-4. Run the application:
+The compose file publishes the port on `${HOST_BINDING:-127.0.0.1}` and mounts
+`./data` for persistence. Inside the container the app binds to `0.0.0.0`,
+which is required for port publishing.
+
+### Production Deployment
+
+For a shared, multi-user instance:
+
+1. Set `LOCAL_MODE=false`, a fixed `SECRET_KEY`, and `REGISTRATION_DISABLED=true`
+   (or Zoho OAuth restricted with `ZOHO_ALLOWED_DOMAINS`).
+2. Run behind a TLS-terminating reverse proxy (Caddy or nginx).
+3. Back up `data/users.db` (WAL mode: back up with the app stopped or use
+   `sqlite3 .backup`).
+
+---
+
+## API Documentation
+
+All endpoints are session-authenticated (automatic in local mode) and exchange JSON.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/start_crawl` | Start a crawl for `{ "url": "..." }` |
+| `POST` | `/api/stop_crawl` | Stop the session's crawl |
+| `POST` | `/api/pause_crawl` / `/api/resume_crawl` | Pause or resume the active crawl |
+| `GET` | `/api/crawl_status` | Crawl state and incremental events |
+| `GET` | `/api/visualization_data` | Nodes and edges for the site graph |
+| `POST` | `/api/filter_issues` | Re-apply issue exclusion patterns |
+| `GET` / `POST` | `/api/get_settings`, `/api/save_settings`, `/api/reset_settings` | User settings |
+| `GET` | `/api/crawls/list`, `/api/crawls/stats` | Crawl history |
+| `GET` | `/api/crawls/<id>` | Crawl metadata |
+| `POST` | `/api/crawls/<id>/load`, `/resume`, `/archive` | Load, resume, or archive a saved crawl |
+| `DELETE` | `/api/crawls/<id>/delete` | Delete a saved crawl |
+| `GET` | `/api/export_stream` | Streaming export (CSV, XLSX, JSON, XML) |
+| `POST` | `/api/login`, `/api/register`, `/api/guest-login`, `/api/logout` | Authentication (multi-user mode) |
+| `GET` | `/auth/zoho/login`, `/auth/zoho/callback` | Zoho OAuth flow |
+
+**Start a crawl**
+
 ```bash
-# Standard mode (with authentication and tier system)
-python main.py
-
-# Local mode (all users get admin tier, no rate limits)
-python main.py --local
-# or
-python main.py -l
+curl -c cookies.txt -b cookies.txt http://127.0.0.1:5000/ -o /dev/null
+curl -c cookies.txt -b cookies.txt \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://www.bemol.com.br"}' \
+     http://127.0.0.1:5000/api/start_crawl
 ```
 
-5. Open your browser and navigate to:
-   - Local: `http://localhost:5000`
-   - Network: `http://<your-ip>:5000`
+```json
+{ "success": true, "crawl_id": 4, "message": "Crawl started successfully" }
+```
 
+**Poll status**
 
-## LibreCrawl Plugins
+```bash
+curl -b cookies.txt http://127.0.0.1:5000/api/crawl_status
+```
 
-Drop your custom plugin files in `/web/static/plugins/`! Each `.js` file will automatically create a new tab in LibreCrawl.
+The response includes `status` (`running`, `paused`, `completed`), aggregate
+`stats`, and the URL, link, and issue events the client has not yet received.
 
+**Authentication flow (multi-user mode):** `POST /api/login` validates the
+bcrypt hash and stores `user_id` and `tier` in a signed session cookie. With
+Zoho enabled, `/auth/zoho/login` starts an OAuth 2.0 authorization code flow
+and the callback links or creates the account by verified email.
 
-### 🔌 Quick Start
+Upstream reference: [librecrawl.com/api/docs](https://librecrawl.com/api/docs/).
 
-1. Create a new `.js` file in this folder (e.g., `my-plugin.js`)
-2. Register your plugin using the LibreCrawl Plugin API
-3. Refresh the app - your new tab appears automatically!
+---
 
-### 📝 Example Plugin Structure
+## Database Design
 
-```javascript
-LibreCrawlPlugin.register({
-  // Required: Unique ID (used for tab identification)
-  id: 'my-plugin',
+A single SQLite file (`data/users.db`) in WAL mode.
 
-  // Required: Display name
-  name: 'My Plugin',
+```mermaid
+erDiagram
+    users ||--o{ crawls : owns
+    users ||--o| user_settings : has
+    users ||--o{ verification_tokens : receives
+    crawls ||--o{ crawled_urls : contains
+    crawls ||--o{ crawl_links : contains
+    crawls ||--o{ crawl_issues : contains
+    crawls ||--o{ crawl_queue : checkpoints
 
-  // Required: Tab configuration
-  tab: {
-    label: 'My Tab',
-    icon: '🔥', // Optional emoji
-  },
-
-  // Called when your tab is activated
-  onTabActivate(container, data) {
-    // data contains: { urls, links, issues, stats }
-    container.innerHTML = `
-      <div class="plugin-content" style="padding: 20px; overflow-y: auto; max-height: calc(100vh - 280px);">
-        <h2>My Custom Analysis</h2>
-        <p>Found ${data.urls.length} URLs!</p>
-      </div>
-    `;
-  },
-
-  // Optional: Called during live crawls when data updates
-  onDataUpdate(data) {
-    if (this.isActive) {
-      // Update your UI
+    users {
+        int id PK
+        text username
+        text email
+        text password_hash
+        text tier
+        int verified
     }
-  }
-});
+    crawls {
+        int id PK
+        int user_id FK
+        text base_url
+        text status
+    }
+    crawled_urls {
+        int id PK
+        int crawl_id FK
+        text url
+        int status_code
+    }
+    crawl_links {
+        int id PK
+        int crawl_id FK
+        text source_url
+        text target_url
+    }
+    crawl_issues {
+        int id PK
+        int crawl_id FK
+        text url
+        text type
+    }
+    crawl_queue {
+        int id PK
+        int crawl_id FK
+        text url
+        int depth
+    }
 ```
 
-### 🎯 Available Data
+Supporting tables: `guest_crawls` (IP-based guest quota), `crawl_history`, and
+`user_settings`. The diagram shows the main columns only.
 
-Your plugin receives the same data as built-in tabs:
+**Data model decisions**
 
-- **`urls`** - Array of all crawled URLs with full metadata
-- **`links`** - All discovered links (internal/external)
-- **`issues`** - Detected SEO issues
-- **`stats`** - Crawl statistics (discovered, crawled, depth, speed)
+- **SQLite over a server database:** zero administration and a single file to
+  back up, which suits one analyst per machine. WAL mode allows the UI to read
+  while the crawler writes.
+- **Queue persisted as a table:** makes pause, resume, and crash recovery
+  possible without an external broker.
+- **Per-crawl child tables:** deleting or archiving a crawl is a scoped operation.
 
-### 📚 Full API Reference
+---
 
-#### Plugin Configuration
+## Security
 
-```javascript
-{
-  id: string,              // Unique identifier
-  name: string,            // Display name
-  version: string,         // Optional version
-  author: string,          // Optional author
-  description: string,     // Optional description
+| Concern | Current state |
+|---|---|
+| Authentication | bcrypt password hashes, signed Flask session cookies, optional Zoho OAuth 2.0 |
+| Authorization | Tier model (`guest`, `user`, `extra`, `admin`); guests limited to 3 crawls per IP per 24 h |
+| Local mode | Disables authentication entirely. Bind to `127.0.0.1` (default in `start-librecrawl-local.bat` and `.env`) |
+| Secrets management | Environment variables and a git-ignored `.env`; no secrets in the repository |
+| Encryption in transit | None built in; terminate TLS at a reverse proxy for shared deployments |
+| Input validation | Settings validated against typed ranges; URLs normalized before crawling |
+| Rate limiting | Token bucket towards target sites; per-tier limits for users |
+| OWASP notes | Jinja2 auto-escaping for templates; `DANGEROUSLY_SKIP_AUTH` must never be enabled on a network |
 
-  tab: {
-    label: string,         // Tab button text
-    icon: string,          // Optional emoji/icon
-    position: number       // Optional position (default: append to end)
-  }
-}
+> **Warning:** never combine `LOCAL_MODE=true` with `HOST=0.0.0.0` on a corporate
+> network. Every visitor would receive admin access.
+
+---
+
+## Testing Strategy
+
+| Level | Tool | Scope |
+|---|---|---|
+| Regression (deterministic) | `tests/fixture_tests.py` | Crawler behavior against local HTTP fixture servers; no internet access |
+| End-to-end | `tests/crawl_harness.py` | Live crawl through the HTTP API using the same event protocol as the UI |
+| Manual UI | Browser | Theme, visualization, and export checks |
+
+```bash
+# Deterministic suite (exit code != 0 on failure)
+python -X utf8 tests/fixture_tests.py
+
+# End-to-end against a live site (app must be running)
+python -X utf8 main.py --local --host 127.0.0.1
+python -X utf8 tests/crawl_harness.py https://example.com/ --max-urls 150
 ```
 
-#### Lifecycle Hooks
+Current result on Windows 11, Python 3.14 64-bit: **58 passed, 0 failed**.
 
-- `onLoad()` - Called when plugin loads
-- `onTabActivate(container, data)` - Called when tab becomes active
-- `onTabDeactivate()` - Called when user switches away
-- `onDataUpdate(data)` - Called during live crawls
-- `onCrawlComplete(data)` - Called when crawl finishes
+Each fixture test pins a bug that previously reached production (cross-domain
+redirects, image budget accounting, event ordering, duplicate detection
+complexity, export formats). See [`tests/README.md`](tests/README.md).
+Coverage is not measured yet. New crawler behavior should ship with a fixture test.
 
-#### Utilities
+---
 
-Access built-in utilities via `this.utils`:
+## Observability
 
-```javascript
-this.utils.showNotification(message, type) // 'success', 'error', 'info'
-this.utils.formatUrl(url)
-this.utils.escapeHtml(text)
+| Signal | Implementation |
+|---|---|
+| Logs | Structured console output from Waitress and the crawler (`log_level` setting) |
+| Metrics | Live crawl statistics in the UI; process memory via psutil |
+| Memory diagnostics | `/debug/memory` page and `/api/debug/memory` endpoints (admin) |
+| Tracing, dashboards, alerting | Not implemented |
+
+For a shared deployment, the natural next step is shipping stdout to the
+existing log platform and exposing crawl counters to Prometheus. This is not
+needed for single-user local use.
+
+---
+
+## CI/CD Pipeline
+
+There is no pipeline yet. The proposed first iteration:
+
+```mermaid
+flowchart LR
+    Push[Push / PR] --> Lint[Lint<br/>ruff]
+    Lint --> Test[Fixture tests<br/>windows-latest + ubuntu-latest]
+    Test --> Scan[Dependency scan<br/>pip-audit]
+    Scan --> Image[Docker build<br/>on main only]
 ```
 
-#### 🎨 Styling
+Running the fixture tests on `windows-latest` matters for this fork, because
+the Windows startup path is its main reason to exist.
 
-Use these CSS classes to match LibreCrawl's design:
+---
 
-- `.plugin-content` - Main container
-- `.plugin-header` - Header section
-- `.data-table` - Tables (auto-styled)
-- `.stat-card` - Statistic cards
-- `.score-good` / `.score-needs-improvement` / `.score-poor` - Score indicators
+## Infrastructure
 
-**Important:** Always add these styles to your main plugin container for proper scrolling:
+The target runtime is a **single workstation**. No cloud services, IaC, or
+container orchestration are used or required.
 
-```javascript
-container.innerHTML = `
-  <div class="plugin-content" style="padding: 20px; overflow-y: auto; max-height: calc(100vh - 280px);">
-    <!-- Your content here -->
-  </div>
-`;
+| Environment | Runtime | Data |
+|---|---|---|
+| Analyst laptop (primary) | Native Python virtualenv via `start-librecrawl-local.bat` | Local SQLite |
+| Server with Docker (optional) | `docker compose` | `./data` volume |
+
+If a shared instance becomes necessary, a single small VM or container service
+with a persistent volume is sufficient. SQLite keeps it to one stateful component.
+
+---
+
+## Performance Considerations
+
+- **Parallelism:** a bounded worker pool (default concurrency 5, up to 50)
+  combined with a token bucket keeps throughput steady without bursting the
+  target site. A crawl of `bemol.com.br` reached about 430 URLs per minute on
+  default settings.
+- **Incremental polling:** clients receive only events after their last sequence
+  number, and responses are compressed.
+- **Batched persistence:** rows are committed in batches instead of per URL.
+- **Memory guardrails:** `memory_monitor` and a per-user memory tracker stop
+  runaway crawls. `DEMO_MODE` enforces a hard 1.5 GB cap.
+- **Duplicate detection:** linear-time grouping (pinned by a fixture test)
+  instead of pairwise comparison.
+- **JavaScript rendering is expensive:** enable it only for sections that need
+  it. Most VTEX pages expose SEO-critical tags in the server-rendered HTML.
+- **Cost:** no infrastructure cost for local use.
+
+---
+
+## Engineering Practices
+
+| Practice | Application in this repository |
+|---|---|
+| SOLID | Crawler concerns split into single-purpose modules in `src/core` |
+| DRY | Design tokens centralize brand colors instead of repeating hex values |
+| KISS | No build step, no external services, one process, one database file |
+| YAGNI | No cloud, queue, or cache layers until a shared deployment requires them |
+| Twelve-Factor | Configuration through environment variables and `.env`; logs to stdout |
+| Fork hygiene | Customizations isolated in new files; `upstream` remote tracked for merges |
+| Conventional Commits | `feat(ui): ...`, `fix(crawler): ...` |
+| Automated testing | Deterministic fixture suite that pins production bugs |
+| Code review | Changes go through pull requests against `main` |
+
+---
+
+## Technical Decisions
+
+### ADR-001: Native Python instead of Docker on workstations
+
+- **Context:** corporate laptops block Docker Desktop installation.
+- **Decision:** ship a Windows batch script that builds a per-user virtualenv
+  and downloads Chromium through Playwright.
+- **Consequences:** no admin rights needed. Requires a 64-bit Python, which
+  the script detects explicitly.
+
+### ADR-002: Virtualenv outside the project folder
+
+- **Context:** the project lives in a OneDrive-synced folder, and a virtualenv
+  contains thousands of small files.
+- **Decision:** create it under `%LOCALAPPDATA%\LibreCrawl\venv`.
+- **Consequences:** no sync overhead. Dependencies reinstall automatically when
+  `requirements.txt` changes.
+
+### ADR-003: Theme as an override layer
+
+- **Context:** the upstream stylesheet has hundreds of hardcoded colors, and the
+  fork must stay mergeable.
+- **Decision:** add `theme-bemol.css` with design tokens, loaded after
+  `styles.css`, and edit upstream files only where unavoidable.
+- **Consequences:** small upstream diff. Legacy hex values remain in `styles.css`
+  but are overridden on the main page.
+
+### ADR-004: Accessible brand blue
+
+- **Context:** the official Bemol blue `#0096D7` has a 3.31:1 contrast ratio
+  with white, which fails WCAG AA for normal text.
+- **Decision:** use `#0079B8` (4.74:1) for surfaces that carry white text, and
+  keep `#0096D7` for the logo, indicators, and focus rings.
+
+### ADR-005: SQLite instead of PostgreSQL
+
+- **Context:** one analyst per machine, no database administration available.
+- **Decision:** keep upstream SQLite in WAL mode.
+- **Consequences:** trivial backup and setup. Not suitable for many concurrent
+  writers across machines.
+
+---
+
+## Challenges and Lessons Learned
+
+| Challenge | Root cause | Solution |
+|---|---|---|
+| `pip install` failed with `ResolutionImpossible` | Default `python` on the machine was 32-bit; Playwright and greenlet have no 32-bit Windows wheels | Startup script selects a 64-bit interpreter explicitly |
+| App crashed at startup with `UnicodeEncodeError` | Windows console code page 1252 cannot print emoji | `PYTHONUTF8=1` / `-X utf8` |
+| Local mode reachable from the LAN | Bind address was hardcoded to `0.0.0.0` | `--host` / `HOST` option, `127.0.0.1` for local mode |
+| Brand color failed accessibility | Official blue too light for white text | Separate brand and surface tokens |
+| Mergeability vs. deep restyling | Hundreds of inline and hardcoded colors upstream | Override layer and tokens for JS-driven colors |
+
+---
+
+## Roadmap
+
+#### v1.0: Local audit tool (current)
+
+- Native Windows startup, local-only binding, Bemol theme on the main page.
+
+#### v2.0: Complete visual identity and offline support
+
+- Theme across all pages, light and dark modes, self-hosted fonts and scripts,
+  CI running fixture tests on Windows and Linux.
+
+#### v3.0: Recurring audits
+
+- Scheduled crawls, crawl-to-crawl diffs, VTEX-specific issue rules, and
+  summary reports for the SEO team.
+
+---
+
+## Contributing
+
+1. Create a branch from `main`: `git checkout -b feat/<short-description>`.
+2. Keep Bemol-specific changes in new files whenever possible.
+3. Write code, comments, and commits in English; user-facing text in pt-BR.
+4. Use [Conventional Commits](https://www.conventionalcommits.org/).
+5. Run `python -X utf8 tests/fixture_tests.py` and include the result in the PR.
+6. Open a pull request describing objective, changes, impact, testing evidence,
+   and rollback strategy.
+
+**Syncing with upstream LibreCrawl:**
+
+```bash
+git fetch upstream
+git merge upstream/main
 ```
 
-The `max-height: calc(100vh - 280px)` ensures your content scrolls properly within the tab pane.
+UI plugin development is documented in [`web/static/plugins/README.md`](web/static/plugins/README.md).
 
-#### Example Plugins
-
-Check out these example plugins to get started:
-
-- `_example-plugin.js` - Basic template (ignored by loader)
-- `e-e-a-t.js` - E-E-A-T analyzer example
-
-
-### Running Modes
-
-**Standard Mode** (default):
-- Full authentication system with login/register
-- Tier-based access control (Guest, User, Extra, Admin)
-- Guest users limited to 3 crawls per 24 hours (IP-based)
-- Ideal for public-facing demos or shared hosting
-
-**Local Mode** (`--local` or `-l`):
-- All users automatically get admin tier access
-- No rate limits or tier restrictions
-- Perfect for personal use or single-user self-hosting
-- Recommended for local development and testing
-
-## Configuration
-
-Click "Settings" to configure:
-
-- **Crawler settings**: depth (up to 5M URLs), delays, external links
-- **Request settings**: user agent, timeouts, proxy, robots.txt
-- **JavaScript rendering**: browser engine, wait times, viewport size
-- **Filters**: file types and URL patterns to include/exclude
-- **Export options**: formats and fields to export
-- **Custom CSS**: personalize the UI appearance with custom styles
-- **Issue exclusion**: patterns to exclude from SEO issue detection
-
-For PageSpeed analysis, add a Google API key in Settings > Requests for higher rate limits (25k/day vs limited).
-
-## Export formats
-
-- **CSV**: Spreadsheet-friendly format
-- **Excel (XLSX)**: Native spreadsheet workbook
-- **JSON**: Structured data with all details
-- **XML**: Markup format for other tools
-
-## Multi-tenancy
-
-LibreCrawl supports multiple concurrent users with isolated sessions:
-
-- Each browser session gets its own crawler instance and data
-- Settings are stored in browser localStorage (persistent across restarts)
-- Custom CSS themes are per-browser
-- Sessions expire after 1 hour of inactivity
-- Crawl data is isolated between users
-
-## Known limitations
-
-- PageSpeed API has rate limits (works better with API key)
-- Large sites may take time to crawl completely
-- JavaScript rendering is slower than HTTP-only crawling
-- Settings stored in localStorage (cleared if browser data is cleared)
-
-## Files
-
-- `main.py` - Main application and Flask server
-- `src/crawler.py` - Core crawling engine
-- `src/settings_manager.py` - Configuration management
-- `web/` - Frontend interface files
+---
 
 ## License
 
-MIT License - see LICENSE file for details.
+Distributed under the [MIT License](LICENSE).
+
+Based on [LibreCrawl](https://github.com/PhialsBasement/LibreCrawl),
+Copyright (c) 2025 Phiality, also MIT licensed. The original copyright notice
+is preserved in [`LICENSE`](LICENSE) as the license requires.
+
+The Bemol name and logo are trademarks of Bemol S.A. and are not covered by
+the MIT License.
+
+---
+
+## Author
+
+**Fabrício Baraúna**
+Software Engineer · Cloud Engineer · DevOps Engineer · Platform Engineering Enthusiast
+
+- GitHub: [@fabricio-hunt](https://github.com/fabricio-hunt)
+- LinkedIn: [fabricio-barauna93](https://www.linkedin.com/in/fabricio-barauna93/)
