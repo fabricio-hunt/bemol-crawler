@@ -39,6 +39,11 @@ parser.add_argument('--dangerously-skip-auth', '-dsa', action='store_true',
                     help='DANGEROUS: Allow anyone to log in as any username with no password. '
                          'The username is only used to separate per-user sessions. '
                          'Do NOT use on a public network or in production.')
+parser.add_argument('--host', default=os.getenv('HOST', '0.0.0.0'),
+                    help='Interface to bind to (default: 0.0.0.0, or the HOST env var). '
+                         'Use 127.0.0.1 to accept connections from this machine only.')
+parser.add_argument('--port', type=int, default=int(os.getenv('PORT', '5000')),
+                    help='Port to listen on (default: 5000, or the PORT env var)')
 args = parser.parse_args()
 
 LOCAL_MODE = args.local or os.getenv('LOCAL_MODE', '').lower() in ('true', '1', 'yes')
@@ -1948,9 +1953,11 @@ def main():
     print("=" * 60)
     print("LibreCrawl - SEO Spider")
     print("=" * 60)
-    print(f"\n🚀 Server starting on http://0.0.0.0:5000")
-    print(f"🌐 Access from browser: http://localhost:5000")
-    print(f"📱 Access from network: http://<your-ip>:5000")
+    local_url = f"http://localhost:{args.port}"
+    print(f"\n🚀 Server starting on http://{args.host}:{args.port}")
+    print(f"🌐 Access from browser: {local_url}")
+    if args.host not in ('127.0.0.1', 'localhost'):
+        print(f"📱 Access from network: http://<your-ip>:{args.port}")
     print(f"\n✨ Multi-tenancy enabled - each browser session is isolated")
     print(f"💾 Settings stored in browser localStorage")
     print(f"\nPress Ctrl+C to stop the server\n")
@@ -1959,16 +1966,16 @@ def main():
     # Open browser in a separate thread after short delay
     def open_browser():
         time.sleep(1.5)  # Wait for Flask to start
-        webbrowser.open('http://localhost:5000')
+        webbrowser.open(local_url)
 
     browser_thread = threading.Thread(target=open_browser, daemon=True)
     browser_thread.start()
 
     # Run Flask server with Waitress (production-grade WSGI server)
     from waitress import serve
-    print("Starting LibreCrawl on http://localhost:5000")
+    print(f"Starting LibreCrawl on {local_url}")
     print("Using Waitress WSGI server with multi-threading support")
-    serve(app, host='0.0.0.0', port=5000, threads=8)
+    serve(app, host=args.host, port=args.port, threads=8)
 
 if __name__ == '__main__':
     main()
