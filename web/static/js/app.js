@@ -559,7 +559,9 @@ function updateProgressText(data) {
         progressText.textContent = 'Crawl completed';
     } else if (data.status === 'running') {
         const stats = data.stats || crawlState.stats;
-        if (stats.crawled === 0) {
+        if (data.rate_limit && data.rate_limit.is_throttled) {
+            progressText.textContent = `Limitado pela CDN (${data.rate_limit.throttled_hosts.join(', ')}) – reduzindo velocidade`;
+        } else if (stats.crawled === 0) {
             progressText.textContent = 'Starting crawl...';
         } else if (stats.discovered > stats.crawled) {
             progressText.textContent = `Crawling... (${stats.crawled}/${stats.discovered} URLs)`;
@@ -576,6 +578,10 @@ function updateStatsDisplay() {
     document.getElementById('crawledCount').textContent = crawlState.stats.crawled;
     document.getElementById('crawlDepth').textContent = crawlState.stats.depth;
     document.getElementById('crawlSpeed').textContent = crawlState.stats.speed + ' URLs/sec';
+    const throttledCount = document.getElementById('throttledCount');
+    if (throttledCount) {
+        throttledCount.textContent = crawlState.stats.throttled || 0;
+    }
 }
 
 function updateMemoryDisplay(memoryData, memoryDataSizes) {

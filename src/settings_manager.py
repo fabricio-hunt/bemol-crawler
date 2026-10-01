@@ -42,7 +42,7 @@ class SettingsManager:
             'discoverSitemaps', 'enablePageSpeed', 'googleApiKey',
             # Filters tab
             'includeExtensions', 'excludeExtensions', 'includePatterns', 'excludePatterns', 'maxFileSize',
-            'crawlImages',
+            'crawlImages', 'checkImages',
             # JavaScript tab
             'enableJavaScript', 'jsWaitTime', 'jsTimeout', 'jsBrowser', 'jsHeadless',
             'jsUserAgent', 'jsViewportWidth', 'jsViewportHeight', 'jsMaxConcurrentPages',
@@ -81,7 +81,7 @@ class SettingsManager:
             'crawlExternalLinks': False,
 
             # Request settings
-            'userAgent': 'LibreCrawl/1.0 (Web Crawler)',
+            'userAgent': 'BemolCrawler/1.0 (SEO Crawler)',
             'timeout': 10,
             'retries': 3,
             'acceptLanguage': 'en-US,en;q=0.9',
@@ -98,6 +98,7 @@ class SettingsManager:
             'excludePatterns': '',
             'maxFileSize': 50,
             'crawlImages': False,
+            'checkImages': True,
 
             # Duplication detection settings
             'enableDuplicationCheck': True,
@@ -122,7 +123,7 @@ class SettingsManager:
             'jsTimeout': 30,
             'jsBrowser': 'chromium',
             'jsHeadless': True,
-            'jsUserAgent': 'LibreCrawl/1.0 (Web Crawler with JavaScript)',
+            'jsUserAgent': 'BemolCrawler/1.0 (SEO Crawler with JavaScript)',
             'jsViewportWidth': 1920,
             'jsViewportHeight': 1080,
             'jsMaxConcurrentPages': 3,
@@ -490,6 +491,7 @@ class SettingsManager:
             'allow_cookies': settings['allowCookies'],
             'include_extensions': [ext.strip() for ext in settings['includeExtensions'].split(',') if ext.strip()],
             'crawl_images': settings.get('crawlImages', False),
+            'check_images': settings.get('checkImages', True),
             'exclude_extensions': [ext.strip() for ext in settings['excludeExtensions'].split(',') if ext.strip()],
             'include_patterns': [p.strip() for p in settings['includePatterns'].split('\n') if p.strip()],
             'exclude_patterns': [p.strip() for p in settings['excludePatterns'].split('\n') if p.strip()],

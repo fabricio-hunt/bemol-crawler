@@ -9,7 +9,7 @@ let defaultSettings = {
     crawlExternalLinks: false,
 
     // Request settings
-    userAgent: 'LibreCrawl/1.0 (Web Crawler)',
+    userAgent: 'BemolCrawler/1.0 (SEO Crawler)',
     timeout: 10,
     retries: 3,
     acceptLanguage: 'en-US,en;q=0.9',
@@ -26,6 +26,7 @@ let defaultSettings = {
     excludePatterns: '',
     maxFileSize: 50,
     crawlImages: false,
+    checkImages: true,
 
     // Duplication detection settings
     enableDuplicationCheck: true,
@@ -50,7 +51,7 @@ let defaultSettings = {
     jsTimeout: 30,
     jsBrowser: 'chromium',
     jsHeadless: true,
-    jsUserAgent: 'LibreCrawl/1.0 (Web Crawler with JavaScript)',
+    jsUserAgent: 'BemolCrawler/1.0 (SEO Crawler with JavaScript)',
     jsViewportWidth: 1920,
     jsViewportHeight: 1080,
     jsMaxConcurrentPages: 3,
@@ -460,7 +461,7 @@ function collectSettingsFromForm() {
     const formFields = [
         'maxDepth', 'maxUrls', 'crawlDelay', 'followRedirects', 'crawlExternalLinks',
         'userAgent', 'timeout', 'retries', 'acceptLanguage', 'respectRobotsTxt', 'allowCookies', 'discoverSitemaps', 'enablePageSpeed', 'googleApiKey',
-        'includeExtensions', 'excludeExtensions', 'includePatterns', 'excludePatterns', 'maxFileSize', 'crawlImages',
+        'includeExtensions', 'excludeExtensions', 'includePatterns', 'excludePatterns', 'maxFileSize', 'crawlImages', 'checkImages',
         'enableDuplicationCheck', 'duplicationThreshold',
         'exportFormat', 'concurrency', 'memoryLimit', 'logLevel', 'saveSession',
         'enableProxy', 'proxyUrl', 'customHeaders',

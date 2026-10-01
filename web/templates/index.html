@@ -168,6 +168,10 @@
                             <span class="stat-label">Speed</span>
                             <span class="stat-value" id="crawlSpeed">0 URLs/sec</span>
                         </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Bloqueios da CDN (429/503)</span>
+                            <span class="stat-value" id="throttledCount">0</span>
+                        </div>
                     </div>
                 </div>
 
@@ -583,7 +587,7 @@
 
                     <div class="setting-group">
                         <label for="userAgent">User Agent</label>
-                        <input type="text" id="userAgent" value="LibreCrawl/1.0 (Web Crawler)">
+                        <input type="text" id="userAgent" value="BemolCrawler/1.0 (SEO Crawler)">
                         <span class="setting-help">User agent string sent with requests</span>
                     </div>
 
@@ -663,6 +667,14 @@
                             Crawl Images
                         </label>
                         <span class="setting-help">Fully download images as crawl targets. When off, image status and size are still collected via lightweight HEAD requests</span>
+                    </div>
+
+                    <div class="setting-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="checkImages" checked>
+                            Verificar status das imagens
+                        </label>
+                        <span class="setting-help">Envia uma requisição HEAD para cada imagem encontrada. Desative em lojas VTEX grandes para reduzir o volume de requisições à CDN e evitar bloqueios (429)</span>
                     </div>
 
                     <div class="setting-group">
@@ -864,7 +876,7 @@
 
                     <div class="setting-group" id="jsUserAgentGroup" style="display: none;">
                         <label for="jsUserAgent">JavaScript User Agent</label>
-                        <input type="text" id="jsUserAgent" value="LibreCrawl/1.0 (Web Crawler with JavaScript)">
+                        <input type="text" id="jsUserAgent" value="BemolCrawler/1.0 (SEO Crawler with JavaScript)">
                         <span class="setting-help">User agent string for JavaScript-rendered pages</span>
                     </div>
 
