@@ -36,6 +36,7 @@
 - [CI/CD Pipeline](#cicd-pipeline)
 - [Infrastructure](#infrastructure)
 - [Performance Considerations](#performance-considerations)
+- [Crawling VTEX Stores](#crawling-vtex-stores)
 - [Engineering Practices](#engineering-practices)
 - [Technical Decisions](#technical-decisions)
 - [Challenges and Lessons Learned](#challenges-and-lessons-learned)
@@ -625,9 +626,10 @@ with a persistent volume is sufficient. SQLite keeps it to one stateful componen
 ## Performance Considerations
 
 - **Parallelism:** a bounded worker pool (default concurrency 5, up to 50)
-  combined with a token bucket keeps throughput steady without bursting the
-  target site. A crawl of `bemol.com.br` reached about 430 URLs per minute on
-  default settings.
+  paced by a per-host adaptive rate limiter. Page requests follow the
+  configured crawl delay (default 1 s, so about 60 pages per minute); image
+  CDN hosts start unpaced and slow down only when they throttle. See
+  [Crawling VTEX Stores](#crawling-vtex-stores) for tuning.
 - **Incremental polling:** clients receive only events after their last sequence
   number, and responses are compressed.
 - **Batched persistence:** rows are committed in batches instead of per URL.
@@ -638,6 +640,63 @@ with a persistent volume is sufficient. SQLite keeps it to one stateful componen
 - **JavaScript rendering is expensive:** enable it only for sections that need
   it. Most VTEX pages expose SEO-critical tags in the server-rendered HTML.
 - **Cost:** no infrastructure cost for local use.
+
+---
+
+## Crawling VTEX Stores
+
+VTEX applies undisclosed rate limits per IP, account, and route at its edge,
+and they vary during the day. A throttled request receives `429 Too Many
+Requests` with a `Retry-After` header; an overloaded app returns `503`
+([VTEX docs](https://developers.vtex.com/docs/guides/how-to-load-test-a-store),
+[rate limit best practices](https://developers.vtex.com/docs/guides/best-practices-for-avoiding-rate-limit-errors)).
+
+### How the crawler reacts
+
+| Mechanism | Behavior |
+|---|---|
+| Pacing | Every page request goes through the host's rate limiter at the configured crawl delay |
+| Single request per page | Pages are fetched with one streamed `GET`; the size limit is checked from headers, with no pre-flight `HEAD` |
+| `Retry-After` | 429/503 pause every request to that host for the time the server asked (capped at 300 s), or an exponential backoff with jitter |
+| Adaptive rate | Each 429/503 halves the host's rate (floor 0.2 req/s); 20 consecutive successes restore 10% of the configured rate |
+| Status-aware retries | 429/502/503/504 are retried up to the configured retries; the status is recorded only if every attempt fails |
+| Per-host isolation | Image CDN hosts (`vteximg.com.br`, `vtexassets.com`) have their own limiter, so a throttling CDN does not slow page fetches. External links are never paced |
+| Visibility | The sidebar shows the number of CDN blocks (429/503), and the progress line names the hosts being throttled |
+
+### Recommended settings
+
+| Setting | Value | Reason |
+|---|---|---|
+| Crawl Delay | 0.3 to 0.5 s | Steady pace below the edge limit; the limiter backs off further on its own |
+| Concurrency | 2 to 3 | Pacing, not parallelism, sets throughput; fewer open connections look less like a burst |
+| Verificar status das imagens | Off for large crawls | Removes one `HEAD` per new image from the request volume |
+| User Agent | Keep `BemolCrawler/1.0 (SEO Crawler)` | Stable and identifiable, required for an allowlist |
+| Exclude Patterns | See below | Faceted and search URLs multiply the crawl size without SEO value |
+
+```text
+*?map=*
+*?O=*
+*_q=*
+*?PS=*
+/busca*
+/checkout*
+/account*
+/api/*
+```
+
+### Operational measures
+
+- **Allowlist:** open a VTEX support ticket with the crawler's fixed egress IP,
+  its User-Agent, the crawl window, and the expected volume, and ask for the
+  limit to be relaxed for that IP. This is the supported way to lift the limit
+  for our own store.
+- **Off-peak windows:** run full crawls at night, when storefront traffic and
+  limits are less contended.
+- **Sitemap first:** keep sitemap discovery on so the crawl follows canonical
+  URLs instead of facet combinations.
+- **Not recommended:** rotating IPs or spoofing browser User-Agents to evade the
+  edge. It works against our own platform's protection, can get company IPs
+  flagged, and is unnecessary once the crawler is allowlisted.
 
 ---
 
