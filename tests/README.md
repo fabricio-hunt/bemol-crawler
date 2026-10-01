@@ -26,6 +26,10 @@ Each test pins a bug that reached production once:
 | `test_event_ordering_under_polling` | The UI receives an update for a row it was never sent, or the same row twice |
 | `test_duplicate_detection_is_linear` | A site of templated pages holds the crawl in "finishing up" for minutes and produces two duplicate issues per matching pair (700k rows for 1,000 pages), locking the database while they save |
 | `test_export_formats_apply_to_every_data_type` | The format chosen in Settings is ignored for links/issues exports, or Excel silently produces CSV |
+| `test_rate_limiter_adapts_to_throttling` | A 429 does not pause other requests, the rate never recovers, or `Retry-After` is misparsed |
+| `test_delay_paces_http_crawl` | The crawl delay is ignored and every worker fires at once, or each page costs a `HEAD` plus a `GET` |
+| `test_throttled_pages_are_retried` | A page throttled by the CDN is recorded as 429 instead of being retried after `Retry-After` |
+| `test_throttled_image_cdn_gets_own_limiter` | A throttling image CDN slows page fetches down, or its images are recorded as 429 |
 
 ## crawl_harness.py
 

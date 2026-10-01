@@ -21,6 +21,25 @@ IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'ico', 'avif', '
 # Parallel HEAD checks for images and (uncrawled) external links
 HEAD_CHECK_WORKERS = 5
 
+# Retries for HEAD checks; kept low since they only feed link statuses
+HEAD_CHECK_RETRIES = 1
+
+# Responses worth retrying after a pause: the server or its CDN is shedding
+# load or briefly unavailable, not reporting a property of the page
+RETRYABLE_STATUSES = {429, 502, 503, 504}
+
+# Responses that signal the edge is rate limiting us, so every request to
+# that host must slow down rather than only the failing one
+THROTTLE_STATUSES = {429, 503}
+
+# Cap for the backoff between retries after a network error
+NETWORK_ERROR_BACKOFF_MAX_SECONDS = 10
+
+# Starting rate for hosts first reached through asset checks (image CDNs
+# such as vteximg.com.br). Effectively unpaced, as these requests are light,
+# but the host's own limiter still slows down once it starts throttling
+ASSET_HOST_REQUESTS_PER_SECOND = 100.0
+
 
 def classify_fetch_error(exc_or_msg):
     """Classify a failed-fetch error into a coarse error_type.
@@ -70,7 +89,7 @@ def classify_fetch_error(exc_or_msg):
         return 'ssl_error'
     return 'connection_error'
 
-from src.core.rate_limiter import RateLimiter
+from src.core.rate_limiter import RateLimiter, parse_retry_after
 from src.core.seo_extractor import SEOExtractor
 from src.core.link_manager import LinkManager
 from src.core.js_renderer import JavaScriptRenderer
@@ -91,7 +110,7 @@ class WebCrawler:
         # HTTP session
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'LibreCrawl/1.0 (Web Crawler)'
+            'User-Agent': 'BemolCrawler/1.0 (SEO Crawler)'
         })
         self._set_pool_size(self._get_default_config()['concurrency'])
 
@@ -101,6 +120,10 @@ class WebCrawler:
 
         # Component instances (initialized on demand)
         self.rate_limiter = None
+        # One limiter per host: a CDN throttling images must not stall page
+        # fetches, and vice versa. The crawled site's host maps to rate_limiter
+        self._host_limiters = {}
+        self._host_limiters_lock = threading.Lock()
         self.link_manager = None
         self.js_renderer = None
         self.sitemap_parser = None
@@ -137,8 +160,10 @@ class WebCrawler:
             'crawled': 0,
             'depth': 0,
             'speed': 0.0,
+            'throttled': 0,
             'start_time': None
         }
+        self._stats_lock = threading.Lock()
 
         # Pages actually fetched. stats['crawled'] also counts the rows
         # synthesized from HEAD checks, which are not fetches, so the
@@ -196,7 +221,7 @@ class WebCrawler:
             'delay': 1.0,
             'follow_redirects': True,
             'crawl_external': False,
-            'user_agent': 'LibreCrawl/1.0 (Web Crawler)',
+            'user_agent': 'BemolCrawler/1.0 (SEO Crawler)',
             'timeout': 10,
             'retries': 3,
             'accept_language': 'en-US,en;q=0.9',
@@ -204,6 +229,7 @@ class WebCrawler:
             'allow_cookies': True,
             'include_extensions': ['html', 'htm', 'php', 'asp', 'aspx', 'jsp'],
             'crawl_images': False,
+            'check_images': True,
             'exclude_extensions': ['pdf', 'doc', 'docx', 'zip', 'exe', 'dmg'],
             'include_patterns': [],
             'exclude_patterns': [],
@@ -221,7 +247,7 @@ class WebCrawler:
             'js_timeout': 30,
             'js_browser': 'chromium',
             'js_headless': True,
-            'js_user_agent': 'LibreCrawl/1.0 (Web Crawler with JavaScript)',
+            'js_user_agent': 'BemolCrawler/1.0 (SEO Crawler with JavaScript)',
             'js_viewport_width': 1920,
             'js_viewport_height': 1080,
             'js_max_concurrent_pages': 3,
@@ -370,6 +396,8 @@ class WebCrawler:
             requests_per_second = 100.0
 
         self.rate_limiter = RateLimiter(requests_per_second)
+        with self._host_limiters_lock:
+            self._host_limiters = {self.base_domain.lower(): self.rate_limiter}
         self.link_manager = LinkManager(self.base_domain, event_log=self.event_log)
         self.sitemap_parser = SitemapParser(self.session, self.base_domain, self.config['timeout'])
         self.issue_detector = IssueDetector(self.config.get('issue_exclusion_patterns', []))
@@ -395,6 +423,7 @@ class WebCrawler:
             'crawled': 0,
             'depth': 0,
             'speed': 0.0,
+            'throttled': 0,
             'start_time': time.time()
         }
 
@@ -720,6 +749,7 @@ class WebCrawler:
             'is_running_pagespeed': self.is_running_pagespeed,
             'memory': self.memory_monitor.get_stats(),
             'memory_data': data_sizes,
+            'rate_limit': self._get_rate_limit_state(),
             'demo_stopped': self._demo_limit_reached,
             'demo_mode': self.config.get('demo_mode', False)
         }
@@ -1015,6 +1045,90 @@ class WebCrawler:
         else:
             return self._crawl_url_with_requests(url, depth)
 
+    def _get_limiter_for(self, url, is_page):
+        """Rate limiter for the host serving url, created on first use.
+
+        Pages are paced at the configured delay; a host first reached through
+        an asset check starts at ASSET_HOST_REQUESTS_PER_SECOND.
+        """
+        host = urlparse(url).netloc.lower()
+        with self._host_limiters_lock:
+            limiter = self._host_limiters.get(host)
+            if limiter is None:
+                rate = self.rate_limiter.configured_rate if is_page else ASSET_HOST_REQUESTS_PER_SECOND
+                limiter = RateLimiter(rate)
+                self._host_limiters[host] = limiter
+            return limiter
+
+    def _get_rate_limit_state(self):
+        """Rate of the crawled site plus every host currently throttling us"""
+        if not self.rate_limiter:
+            return None
+        with self._host_limiters_lock:
+            limiters = dict(self._host_limiters)
+        state = self.rate_limiter.get_state()
+        throttled_hosts = [host for host, limiter in limiters.items()
+                           if limiter.get_state()['is_throttled']]
+        state['is_throttled'] = bool(throttled_hosts)
+        state['throttled_hosts'] = throttled_hosts
+        return state
+
+    def _fetch(self, method, url, timeout, retries, limiter=None, **kwargs):
+        """Send a request through the rate limiter, retrying transient failures.
+
+        Network errors are retried with exponential backoff. 429/502/503/504
+        responses are retried after the pause the server asked for
+        (Retry-After) or a backoff; 429/503 also slow every request to the host
+        down through its limiter. Once retries run out the last response is returned
+        as-is so its status is recorded. Without a limiter the request is
+        neither paced nor fed back, for third-party hosts whose limits must
+        not slow the crawl.
+        """
+        for attempt in range(retries + 1):
+            if limiter:
+                limiter.acquire()
+
+            try:
+                response = self.session.request(method, url, timeout=timeout, **kwargs)
+            except Exception:
+                if attempt >= retries:
+                    raise
+                time.sleep(min(NETWORK_ERROR_BACKOFF_MAX_SECONDS, 2 ** attempt))
+                continue
+
+            status = response.status_code
+            if status in THROTTLE_STATUSES:
+                with self._stats_lock:
+                    self.stats['throttled'] += 1
+
+            if status not in RETRYABLE_STATUSES:
+                if limiter:
+                    limiter.reward()
+                return response
+
+            retry_after = parse_retry_after(response.headers.get('retry-after'))
+            if limiter and status in THROTTLE_STATUSES:
+                pause = limiter.penalize(retry_after)
+                print(f"Throttled ({status}) on {url}, pausing requests for {pause:.1f}s")
+            elif attempt < retries:
+                time.sleep(retry_after if retry_after is not None
+                           else min(NETWORK_ERROR_BACKOFF_MAX_SECONDS, 2 ** attempt))
+
+            if attempt >= retries:
+                return response
+            response.close()
+
+    def _register_response_status(self, status_code):
+        """Feed a status obtained outside _fetch (JS rendering) to the rate limiter"""
+        if not self.rate_limiter:
+            return
+        if status_code in THROTTLE_STATUSES:
+            with self._stats_lock:
+                self.stats['throttled'] += 1
+            self.rate_limiter.penalize()
+        elif status_code:
+            self.rate_limiter.reward()
+
     def _crawl_url_with_requests(self, url, depth):
         """Crawl a single URL using traditional HTTP requests"""
         print(f"Starting crawl of {url}")
@@ -1022,38 +1136,28 @@ class WebCrawler:
         start_time = time.time()
 
         try:
-            # Check file size if configured
-            if self.config.get('max_file_size', 0) > 0:
-                try:
-                    head_response = self.session.head(
-                        url,
-                        timeout=self.config['timeout'],
-                        allow_redirects=self.config['follow_redirects']
-                    )
-                    content_length = head_response.headers.get('content-length')
-                    if content_length and int(content_length) > self.config['max_file_size']:
-                        return self.seo_extractor.create_empty_result(
-                            url, depth, 0,
-                            f'File too large: {content_length} bytes',
-                            error_type='file_too_large'
-                        )
-                except:
-                    pass  # Continue if HEAD request fails
+            # Stream the response so the size limit is checked from the
+            # headers before the body is downloaded; this replaces a separate
+            # HEAD request per page, halving the requests sent to the server
+            response = self._fetch(
+                'GET', url,
+                timeout=self.config['timeout'],
+                retries=retries,
+                limiter=self._get_limiter_for(url, is_page=True),
+                allow_redirects=self.config['follow_redirects'],
+                stream=True
+            )
 
-            # Fetch the page with retries
-            response = None
-            for attempt in range(retries + 1):
-                try:
-                    response = self.session.get(
-                        url,
-                        timeout=self.config['timeout'],
-                        allow_redirects=self.config['follow_redirects']
-                    )
-                    break
-                except Exception as e:
-                    if attempt >= retries:
-                        raise e
-                    time.sleep(1)
+            max_file_size = self.config.get('max_file_size', 0)
+            content_length = response.headers.get('content-length')
+            if max_file_size > 0 and content_length and content_length.isdigit() \
+                    and int(content_length) > max_file_size:
+                response.close()
+                return self.seo_extractor.create_empty_result(
+                    url, depth, 0,
+                    f'File too large: {content_length} bytes',
+                    error_type='file_too_large'
+                )
 
             # Determine if URL is internal
             is_internal = self.link_manager.is_internal(url)
@@ -1186,6 +1290,7 @@ class WebCrawler:
             # Render page with JavaScript
             html_content, status_code, error, final_url, timing = \
                 await self.js_renderer.render_page(url)
+            self._register_response_status(status_code)
 
             if error:
                 return self.seo_extractor.create_empty_result(
@@ -1331,9 +1436,9 @@ class WebCrawler:
                     current_url, depth = url_info
 
                     if depth <= self.config['max_depth']:
-                        # SMOOTH RATE LIMITING: Only apply if delay > 0
-                        if self.config.get('delay', 0) > 0:
-                            self.rate_limiter.acquire()
+                        # Always pace through the limiter: with delay 0 it
+                        # still slows down when the server throttles
+                        self.rate_limiter.acquire()
 
                         # Create task
                         task = asyncio.create_task(self._crawl_url_with_javascript(current_url, depth))
@@ -1467,7 +1572,7 @@ class WebCrawler:
         lists them (with status) without crawling the other site.
         """
         image_links = [l for l in new_links if l.get('placement') == 'image']
-        if image_links:
+        if image_links and self.config.get('check_images', True):
             self._head_check_links(image_links, depth)
             broken = [l for l in image_links
                       if l.get('target_status') is not None
@@ -1520,15 +1625,21 @@ class WebCrawler:
 
         def _head_check(link):
             url = link['target_url']
+            # Images belong to the crawled site (often on its CDN host), so
+            # their host gets an adaptive limiter; links to other sites are
+            # checked unpaced so a third party's limits never slow the crawl
+            limiter = None if link_check_only else self._get_limiter_for(url, is_page=False)
             content_type = ''
             size = 0
             try:
-                resp = self.session.head(url, timeout=5, allow_redirects=True)
+                resp = self._fetch('HEAD', url, timeout=5, retries=HEAD_CHECK_RETRIES,
+                                   limiter=limiter, allow_redirects=True)
                 # Plenty of servers refuse HEAD but serve GET; confirm with a
                 # streamed GET whose body is never read
                 if resp.status_code in (403, 405, 501):
                     resp.close()
-                    resp = self.session.get(url, timeout=5, allow_redirects=True, stream=True)
+                    resp = self._fetch('GET', url, timeout=5, retries=HEAD_CHECK_RETRIES,
+                                       limiter=limiter, allow_redirects=True, stream=True)
                     resp.close()
                 link['target_status'] = resp.status_code
                 content_type = resp.headers.get('content-type', '').split(';')[0]

@@ -20,6 +20,8 @@ means a real regression rather than a flaky expectation:
      image HEAD checks
   5. the event journal never announces an update before the row it refers to,
      and never repeats a row, even while a client polls during the crawl
+  6. the configured delay paces plain HTTP crawls, and CDN throttling
+     (429 + Retry-After) is retried instead of recorded as the page status
 """
 import http.server
 import os
@@ -30,6 +32,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.crawler import WebCrawler  # noqa: E402
+from src.core.rate_limiter import RateLimiter, parse_retry_after  # noqa: E402
 
 # Fixture servers bind here upward. Override if these clash locally.
 BASE_PORT = int(os.environ.get('FIXTURE_BASE_PORT', '8911'))
@@ -601,6 +604,148 @@ def test_empty_alt_is_not_missing_alt():
         a.shutdown()
 
 
+def test_rate_limiter_adapts_to_throttling():
+    """A throttling response pauses every caller and halves the rate; a run
+    of successes restores it, never above the configured rate."""
+    result('retry-after: seconds parsed', parse_retry_after('3') == 3.0)
+    result('retry-after: http-date parsed',
+           parse_retry_after('Thu, 01 Jan 1970 00:00:00 GMT') == 0.0)
+    result('retry-after: garbage ignored', parse_retry_after('soon') is None)
+    result('retry-after: huge value capped', parse_retry_after('99999') == 300.0)
+
+    limiter = RateLimiter(requests_per_second=10.0)
+    limiter.penalize(retry_after=0.5)
+    state = limiter.get_state()
+    result('limiter: rate halved on penalty',
+           state['effective_rate'] == 5.0 and state['is_throttled'], str(state))
+
+    started = time.time()
+    limiter.acquire()
+    waited = time.time() - started
+    result('limiter: acquire waits out retry-after', waited >= 0.45, f'{waited:.2f}s')
+
+    for _ in range(500):
+        limiter.reward()
+    state = limiter.get_state()
+    result('limiter: rate recovers to configured value, not above',
+           state['effective_rate'] == 10.0 and not state['is_throttled'], str(state))
+
+
+def test_delay_paces_http_crawl():
+    """The delay setting must space requests in the plain HTTP crawler, and
+    each page must cost a single GET (no pre-flight HEAD)."""
+    site = BASE_PORT + 12
+    page_count = 6
+    routes = {'/': html(''.join(f'<a href="/p{i}.html">p</a>' for i in range(page_count)))}
+    for i in range(page_count):
+        routes[f'/p{i}.html'] = html(f'<p>page {i}</p>')
+
+    hits = []
+    times = []
+
+    class TimedList(list):
+        def append(self, item):
+            times.append(time.time())
+            super().append(item)
+
+    hits = TimedList()
+    a = serve(make_handler(routes, hits=hits), site)
+    try:
+        delay = 0.2
+        crawl(f'http://127.0.0.1:{site}/', delay=delay, concurrency=5, check_images=False)
+        gaps = [later - earlier for earlier, later in zip(times, times[1:])]
+        # Allow scheduler jitter, but the burst behaviour (all workers firing
+        # at once) produces gaps of a few milliseconds
+        result('delay: requests spaced by the configured delay',
+               len(gaps) >= page_count and min(gaps) >= delay * 0.8,
+               f'min gap {min(gaps):.3f}s' if gaps else 'no requests')
+        result('delay: one GET per page, no pre-flight HEAD',
+               not any(h.startswith('HEAD') for h in hits), str([h for h in hits if h.startswith('HEAD')][:3]))
+    finally:
+        a.shutdown()
+
+
+def test_throttled_pages_are_retried():
+    """A 429 with Retry-After must be waited out and retried, so the page
+    ends up recorded with its real status instead of 429."""
+    site = BASE_PORT + 13
+    page_count = 4
+    routes = {'/': html(''.join(f'<a href="/p{i}.html">p</a>' for i in range(page_count)))}
+    for i in range(page_count):
+        routes[f'/p{i}.html'] = html(f'<p>page {i}</p>')
+
+    throttled_once = set()
+    lock = threading.Lock()
+    base_handler = make_handler(routes)
+
+    class ThrottlingHandler(base_handler):
+        def do_GET(self):
+            with lock:
+                first_hit = self.path not in throttled_once
+                throttled_once.add(self.path)
+            if first_hit and self.path != '/':
+                self.send_response(429)
+                self.send_header('Retry-After', '1')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
+            super().do_GET()
+
+        do_HEAD = do_GET
+
+    a = serve(ThrottlingHandler, site)
+    try:
+        crawler = crawl(f'http://127.0.0.1:{site}/', delay=0.02, retries=3, check_images=False)
+        statuses = {r['url']: r['status_code'] for r in crawler.crawl_results}
+        pages = {u: s for u, s in statuses.items() if '/p' in u}
+        result('throttle: every page recorded with its real status',
+               len(pages) == page_count and all(s == 200 for s in pages.values()), str(pages))
+        result('throttle: throttled responses counted',
+               crawler.stats['throttled'] >= page_count, str(crawler.stats['throttled']))
+    finally:
+        a.shutdown()
+
+
+def test_throttled_image_cdn_gets_own_limiter():
+    """A throttling image CDN must be retried and slowed on its own, without
+    pacing the page host down with it."""
+    site, cdn = BASE_PORT + 14, BASE_PORT + 15
+    a = serve(make_handler({
+        '/': html(f'<img src="http://127.0.0.1:{cdn}/a.png"><a href="/p.html">p</a>'),
+        '/p.html': html('<p>page</p>'),
+    }), site)
+
+    cdn_hits = []
+    base_handler = make_handler({'/a.png': png()}, hits=cdn_hits)
+
+    class ThrottlingCdn(base_handler):
+        def do_HEAD(self):
+            if not cdn_hits:
+                cdn_hits.append('429')
+                self.send_response(429)
+                self.send_header('Retry-After', '1')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
+            super().do_GET()
+
+    b = serve(ThrottlingCdn, cdn)
+    try:
+        crawler = crawl(f'http://127.0.0.1:{site}/', delay=0.02, check_images=True)
+        image = next((r for r in crawler.crawl_results if r['url'].endswith('/a.png')), {})
+        result('cdn: throttled image retried to its real status',
+               image.get('status_code') == 200, str(image.get('status_code')))
+        page_state = crawler.rate_limiter.get_state()
+        result('cdn: page host keeps its configured rate',
+               page_state['effective_rate'] == page_state['configured_rate'], str(page_state))
+        cdn_limiter = crawler._host_limiters.get(f'127.0.0.1:{cdn}')
+        result('cdn: image host slowed by its own limiter',
+               cdn_limiter is not None and cdn_limiter.requests_per_second < 100.0)
+    finally:
+        a.shutdown()
+        b.shutdown()
+
+
 def _playwright_available():
     try:
         import playwright  # noqa: F401
@@ -620,6 +765,10 @@ TESTS = (
     test_duplicate_detection_is_linear,
     test_export_formats_apply_to_every_data_type,
     test_empty_alt_is_not_missing_alt,
+    test_rate_limiter_adapts_to_throttling,
+    test_delay_paces_http_crawl,
+    test_throttled_pages_are_retried,
+    test_throttled_image_cdn_gets_own_limiter,
 )
 
 
